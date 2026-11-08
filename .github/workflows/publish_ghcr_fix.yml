@@ -36,5 +36,6 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ steps.version.outputs.owner }}/evolution-go:${{ steps.version.outputs.version }}-sharedpool
+            ghcr.io/${{ steps.version.outputs.owner }}/evolution-go:sharedpool-latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}-sharedpool
