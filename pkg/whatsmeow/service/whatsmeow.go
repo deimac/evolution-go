@@ -28,6 +28,7 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -1194,8 +1195,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] ===== MESSAGE RECEIVED ===== ID: %s, From: %s, Type: %s, Size: %s", mycli.userID, evt.Info.ID, evt.Info.Chat.String(), evt.Info.Type, messageSize)
 
-		// se readMessages for true ele marca como lida
-		if mycli.Instance.ReadMessages {
+		// se readMessages for true ele marca como lida (histórico não)
+		if mycli.Instance.ReadMessages && evt.SourceWebMsg == nil {
 			messageIDs := []string{evt.Info.ID}
 			err := mycli.WAClient.MarkRead(context.Background(), messageIDs, time.Now(), evt.Info.Sender, evt.Info.Sender)
 			if err != nil {
@@ -1267,7 +1268,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		// Auto-marca mensagens como lidas se configurado
-		if mycli.Instance.ReadMessages && !evt.Info.IsFromMe {
+		if mycli.Instance.ReadMessages && !evt.Info.IsFromMe && evt.SourceWebMsg == nil {
 			go func() {
 				time.Sleep(1 * time.Second) // Pequeno delay para parecer mais natural
 				err := mycli.WAClient.MarkRead(context.Background(), []types.MessageID{evt.Info.ID}, evt.Info.Timestamp, evt.Info.Chat, evt.Info.Sender)
@@ -1307,6 +1308,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		dataMap, ok := postMap["data"].(map[string]interface{})
 		if !ok {
 			dataMap = make(map[string]interface{})
+		}
+
+		// Mensagem vinda do histórico: o destino não deve tratá-la como nova.
+		if evt.SourceWebMsg != nil {
+			dataMap["isHistory"] = true
+			delete(dataMap, "SourceWebMsg")
 		}
 
 		referral := extractReferralFromMessage(evt.Message)
@@ -1869,6 +1876,18 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Chat archived", mycli.userID)
 	case *events.HistorySync:
+		// Histórico pedido sob demanda (recuperação de lacuna): cada mensagem segue
+		// pelo caminho normal do webhook, marcada como histórico.
+		if evt.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+			msgs := onDemandHistoryMessages(evt.Data, mycli.WAClient.ParseWebMessage, func(err error) {
+				mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] History sync message skipped: %v", mycli.userID, err)
+			})
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] On-demand history: %d messages", mycli.userID, len(msgs))
+			for _, m := range msgs {
+				mycli.myEventHandler(m)
+			}
+			return
+		}
 		doWebhook = true
 		postMap["event"] = "HistorySync"
 
@@ -2559,7 +2578,7 @@ func (w *whatsmeowService) SendToGlobalQueues(eventType string, payload []byte, 
 			case "CallOffer", "CallAccept", "CallTerminate", "CallOfferNotice", "CallRelayLatency":
 				globalEventType = "CALL"
 			case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected",
-		"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
+				"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
 				globalEventType = "CONNECTION"
 			case "LabelEdit", "LabelAssociationChat", "LabelAssociationMessage":
 				globalEventType = "LABEL"
@@ -2622,7 +2641,7 @@ func (w *whatsmeowService) SendToGlobalQueues(eventType string, payload []byte, 
 		case "CallOffer", "CallAccept", "CallTerminate", "CallOfferNotice", "CallRelayLatency":
 			globalEventType = "CALL"
 		case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected",
-		"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
+			"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
 			globalEventType = "CONNECTION"
 		case "LabelEdit", "LabelAssociationChat", "LabelAssociationMessage":
 			globalEventType = "LABEL"
