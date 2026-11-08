@@ -444,7 +444,7 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 	if minLevel == "" {
 		minLevel = "INFO" // Nível mínimo para garantir que logs INFO apareçam
 	}
-	clientLog := waLog.Stdout("Client", minLevel, true)
+	clientLog := &nodeWatchLogger{Logger: waLog.Stdout("Client", minLevel, true)}
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	w.clientPointer[cd.Instance.Id] = client
@@ -530,6 +530,14 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 		loggerWrapper:      w.loggerWrapper,
 		qrcodeCount:        0,
 		passkeyCeremony:    w.passkeyCeremony,
+	}
+
+	unhandledNodes := newNodeThrottle(time.Hour)
+	clientLog.onUnhandled = func(tag string) {
+		if unhandledNodes.allow(tag, time.Now()) {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Unhandled WhatsApp node %q (not acked by whatsmeow)", mycli.userID, tag)
+			mycli.dispatchHealthEvent("UnhandledNode", map[string]interface{}{"tag": tag})
+		}
 	}
 
 	mycli.eventHandlerID = mycli.WAClient.AddEventHandler(mycli.myEventHandler)
@@ -1983,6 +1991,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		doWebhook = true
 		postMap["event"] = "CallRelayLatency"
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call relay latency %+v", mycli.userID, evt)
+	case *events.OfflineSyncPreview:
+		// Tamanho da fila offline: com OfflineSyncCompleted, o receptor percebe fila parada.
+		doWebhook = true
+		postMap["event"] = "OfflineSyncPreview"
 	case *events.OfflineSyncCompleted:
 		doWebhook = true
 		postMap["event"] = "OfflineSyncCompleted"
@@ -2257,7 +2269,8 @@ func (w *whatsmeowService) CallWebhook(instance *instance_model.Instance, queueN
 			w.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Event received of type %s", instance.Id, eventType)
 			w.sendToQueueOrWebhook(instance, queueName, jsonData)
 		}
-	case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected":
+	case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected",
+		"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
 		if contains(subscriptions, "CONNECTION") {
 			w.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Event received of type %s", instance.Id, eventType)
 			w.sendToQueueOrWebhook(instance, queueName, jsonData)
@@ -2545,7 +2558,8 @@ func (w *whatsmeowService) SendToGlobalQueues(eventType string, payload []byte, 
 				globalEventType = "CHAT_PRESENCE"
 			case "CallOffer", "CallAccept", "CallTerminate", "CallOfferNotice", "CallRelayLatency":
 				globalEventType = "CALL"
-			case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected":
+			case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected",
+		"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
 				globalEventType = "CONNECTION"
 			case "LabelEdit", "LabelAssociationChat", "LabelAssociationMessage":
 				globalEventType = "LABEL"
@@ -2607,7 +2621,8 @@ func (w *whatsmeowService) SendToGlobalQueues(eventType string, payload []byte, 
 			globalEventType = "CHAT_PRESENCE"
 		case "CallOffer", "CallAccept", "CallTerminate", "CallOfferNotice", "CallRelayLatency":
 			globalEventType = "CALL"
-		case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected":
+		case "Connected", "PairSuccess", "TemporaryBan", "LoggedOut", "ConnectFailure", "Disconnected",
+		"OfflineSyncPreview", "OfflineSyncCompleted", "UnhandledNode":
 			globalEventType = "CONNECTION"
 		case "LabelEdit", "LabelAssociationChat", "LabelAssociationMessage":
 			globalEventType = "LABEL"
@@ -2927,4 +2942,22 @@ func cleanSenderID(senderID string) string {
 		}
 	}
 	return senderID
+}
+
+// dispatchHealthEvent sends a connection-health event (not a WhatsApp event) to
+// the instance webhook, under the CONNECTION subscription.
+func (mycli *MyClient) dispatchHealthEvent(event string, data map[string]interface{}) {
+	values, err := json.Marshal(map[string]interface{}{
+		"event":         event,
+		"data":          data,
+		"instanceToken": mycli.token,
+		"instanceId":    mycli.userID,
+		"instanceName":  mycli.Instance.Name,
+	})
+	if err != nil {
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to marshal %s event", mycli.userID, event)
+		return
+	}
+	queueName := strings.ToLower(fmt.Sprintf("%s.%s", mycli.userID, event))
+	go mycli.service.CallWebhook(mycli.Instance, queueName, values)
 }
