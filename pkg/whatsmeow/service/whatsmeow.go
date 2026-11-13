@@ -1181,6 +1181,27 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postMap["event"] = "Message"
 		// Message received
 
+		// Edição de mensagem chega criptografada (secretEncryptedMessage / MESSAGE_EDIT). Decripta com o segredo
+		// da mensagem original e entrega no formato de edição comum: protocolMessage{key: original, editedMessage}.
+		if enc := evt.Message.GetSecretEncryptedMessage(); enc != nil && enc.GetSecretEncType() == waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+			if cli := mycli.clientPointer[mycli.userID]; cli != nil {
+				decrypted, err := cli.DecryptSecretEncryptedMessage(context.Background(), evt)
+				if err != nil {
+					mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to decrypt message edit %s: %v", mycli.userID, evt.Info.ID, err)
+				} else {
+					editType := waE2E.ProtocolMessage_MESSAGE_EDIT
+					evt.Message = &waE2E.Message{
+						ProtocolMessage: &waE2E.ProtocolMessage{
+							Type:          &editType,
+							Key:           enc.GetTargetMessageKey(),
+							EditedMessage: decrypted,
+						},
+						MessageContextInfo: evt.Message.GetMessageContextInfo(),
+					}
+				}
+			}
+		}
+
 		// Log message arrival with detailed info
 		messageSize := "unknown"
 		if evt.Message.GetDocumentMessage() != nil && evt.Message.GetDocumentMessage().FileLength != nil {
