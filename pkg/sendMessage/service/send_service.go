@@ -1043,6 +1043,9 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 			// particular). On failure jpegThumb is nil and the message is sent
 			// without a preview rather than failing the request.
 			jpegThumb := makeJPEGThumbnail(fileData, 72)
+			// Width/Height let the phone size the bubble; without them it guesses
+			// and stretches the preview (wide images look squashed until opened).
+			imgWidth, imgHeight := imageDimensions(fileData)
 			if isNewsletter {
 				// Newsletter: SEM MediaKey e FileEncSHA256
 				media = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
@@ -1053,6 +1056,8 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    &uploaded.FileLength,
 					JPEGThumbnail: jpegThumb,
+					Width:         imgWidth,
+					Height:        imgHeight,
 				}}
 			} else {
 				// Normal: COM MediaKey e FileEncSHA256
@@ -1066,6 +1071,8 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
 					JPEGThumbnail: jpegThumb,
+					Width:         imgWidth,
+					Height:        imgHeight,
 				}}
 			}
 			mediaType = "ImageMessage"
@@ -1343,6 +1350,9 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 			// particular). On failure jpegThumb is nil and the message is sent
 			// without a preview rather than failing the request.
 			jpegThumb := makeJPEGThumbnail(fileData, 72)
+			// Width/Height let the phone size the bubble; without them it guesses
+			// and stretches the preview (wide images look squashed until opened).
+			imgWidth, imgHeight := imageDimensions(fileData)
 			if isNewsletter {
 				// Newsletter: sem criptografia (sem MediaKey e FileEncSHA256)
 				media = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
@@ -1353,6 +1363,8 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    &uploaded.FileLength,
 					JPEGThumbnail: jpegThumb,
+					Width:         imgWidth,
+					Height:        imgHeight,
 				}}
 			} else {
 				// Normal: com criptografia
@@ -1366,6 +1378,8 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
 					JPEGThumbnail: jpegThumb,
+					Width:         imgWidth,
+					Height:        imgHeight,
 				}}
 			}
 			mediaType = "ImageMessage"
@@ -2087,6 +2101,16 @@ func stringPointer(s string) *string {
 // The thumbnail keeps the original aspect ratio and is capped at maxWidth
 // pixels wide. It returns nil if the image cannot be decoded so callers can
 // fall back to sending the message without a preview thumbnail.
+// imageDimensions reads the image header (no full decode). nil when unknown,
+// so the field is simply omitted from the message.
+func imageDimensions(fileData []byte) (*uint32, *uint32) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(fileData))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 {
+		return nil, nil
+	}
+	return proto.Uint32(uint32(cfg.Width)), proto.Uint32(uint32(cfg.Height))
+}
+
 func makeJPEGThumbnail(fileData []byte, maxWidth int) []byte {
 	if maxWidth < 1 {
 		maxWidth = 72
@@ -2954,6 +2978,9 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 						if err == nil {
 							// Generate JPEG thumbnail for iOS compatibility
 							jpegThumb := makeJPEGThumbnail(fileData, 72)
+							// Width/Height let the phone size the bubble; without them it guesses
+							// and stretches the preview (wide images look squashed until opened).
+							imgWidth, imgHeight := imageDimensions(fileData)
 
 							header.HasMediaAttachment = proto.Bool(true)
 							header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{
@@ -2966,6 +2993,8 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 									FileSHA256:    uploaded.FileSHA256,
 									FileLength:    proto.Uint64(uint64(len(fileData))),
 									JPEGThumbnail: jpegThumb,
+									Width:         imgWidth,
+									Height:        imgHeight,
 								},
 							}
 						}
@@ -3266,6 +3295,9 @@ func (s *sendService) sendStatusMedia(client *whatsmeow.Client, data *StatusMedi
 		// inline preview instead of the gray camera placeholder. On failure
 		// jpegThumb is nil and the status is posted without a preview.
 		jpegThumb := makeJPEGThumbnail(fileData, 72)
+		// Width/Height let the phone size the bubble; without them it guesses
+		// and stretches the preview (wide images look squashed until opened).
+		imgWidth, imgHeight := imageDimensions(fileData)
 		media = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
 			Caption:       proto.String(data.Caption),
 			URL:           proto.String(uploaded.URL),
@@ -3276,6 +3308,8 @@ func (s *sendService) sendStatusMedia(client *whatsmeow.Client, data *StatusMedi
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(fileData))),
 			JPEGThumbnail: jpegThumb,
+			Width:         imgWidth,
+			Height:        imgHeight,
 		}}
 		mediaType = "ImageMessage"
 	case "video":
